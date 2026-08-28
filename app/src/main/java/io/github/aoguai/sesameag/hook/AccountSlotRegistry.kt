@@ -15,7 +15,7 @@ import java.nio.file.StandardOpenOption.CREATE
 import java.nio.file.StandardOpenOption.WRITE
 import java.security.MessageDigest
 
-const val MAX_EXECUTABLE_ACCOUNT_SLOTS = 2
+const val MAX_EXECUTABLE_ACCOUNT_SLOTS = 10
 
 enum class AccountSlotMigrationState {
     READY,
@@ -103,37 +103,26 @@ object AccountSlotRegistry {
     fun admitRuntimeUser(rawUserId: String?): AccountSlotAdmission {
         val userId = normalizeUserId(rawUserId)
             ?: return AccountSlotAdmission.Denied("invalid_user_id")
+        // 全量放行：任何合法账号都可执行，不再受槽位上限 / 迁移状态限制。
+        // 仍将首次出现的账号登记进 activeUserIds，供 UI 展示与运维记录使用。
         return withLockedRecord { loaded ->
             val record = loaded.record
-            when {
-                record.migrationState != AccountSlotMigrationState.READY -> {
-                    LockedResult(AccountSlotAdmission.Denied("account_slot_migration_required"))
-                }
-                userId in record.activeUserIds -> {
-                    LockedResult(AccountSlotAdmission.Allowed(userId, addedToSlot = false))
-                }
-                record.activeUserIds.size >= MAX_EXECUTABLE_ACCOUNT_SLOTS -> {
-                    LockedResult(AccountSlotAdmission.Denied("account_slot_full"))
-                }
-                else -> {
-                    val updated = record.copy(activeUserIds = record.activeUserIds + userId)
-                    LockedResult(AccountSlotAdmission.Allowed(userId, addedToSlot = true), updated)
-                }
+            if (userId in record.activeUserIds) {
+                LockedResult(AccountSlotAdmission.Allowed(userId, addedToSlot = false))
+            } else {
+                val updated = record.copy(
+                    migrationState = AccountSlotMigrationState.READY,
+                    activeUserIds = record.activeUserIds + userId,
+                )
+                LockedResult(AccountSlotAdmission.Allowed(userId, addedToSlot = true), updated)
             }
-        } ?: AccountSlotAdmission.Denied("registry_unavailable")
+        } ?: AccountSlotAdmission.Allowed(userId, addedToSlot = false)
     }
 
     fun checkExecutableUser(rawUserId: String?): AccountSlotExecutionCheck {
         val userId = normalizeUserId(rawUserId) ?: return AccountSlotExecutionCheck.InvalidUserId
-        val current = snapshot()
-        if (current.errorCode != null) {
-            return AccountSlotExecutionCheck.RegistryUnavailable
-        }
-        return if (current.isReady && userId in current.activeUserIds) {
-            AccountSlotExecutionCheck.Allowed(userId)
-        } else {
-            AccountSlotExecutionCheck.Inactive(userId)
-        }
+        // 全量放行：合法账号一律视为可执行。
+        return AccountSlotExecutionCheck.Allowed(userId)
     }
 
     fun isExecutableUser(rawUserId: String?): Boolean =
@@ -141,8 +130,8 @@ object AccountSlotRegistry {
 
     fun selectLegacySlots(rawUserIds: Collection<String?>): AccountSlotRemoval {
         val selected = rawUserIds.mapNotNull(::normalizeUserId).distinct()
-        if (selected.size != MAX_EXECUTABLE_ACCOUNT_SLOTS) {
-            return AccountSlotRemoval(false, "exactly_two_accounts_required")
+        if (selected.isEmpty() || selected.size > MAX_EXECUTABLE_ACCOUNT_SLOTS) {
+            return AccountSlotRemoval(false, "account_slot_selection_out_of_range")
         }
         return withLockedRecord { loaded ->
             val record = loaded.record
@@ -242,19 +231,12 @@ object AccountSlotRegistry {
     }
 
     private fun bootstrapRecord(): AccountSlotRecord {
-        val candidates = legacyCandidates()
-        return when {
-            candidates.size <= MAX_EXECUTABLE_ACCOUNT_SLOTS -> AccountSlotRecord(
-                schemaVersion = SCHEMA_VERSION,
-                migrationState = AccountSlotMigrationState.READY,
-                activeUserIds = candidates,
-            )
-            else -> AccountSlotRecord(
-                schemaVersion = SCHEMA_VERSION,
-                migrationState = AccountSlotMigrationState.SELECTION_REQUIRED,
-                activeUserIds = emptyList(),
-            )
-        }
+        // 全量放行：首次引导时把所有历史账号直接纳入 active，不再需要手动选择。
+        return AccountSlotRecord(
+            schemaVersion = SCHEMA_VERSION,
+            migrationState = AccountSlotMigrationState.READY,
+            activeUserIds = legacyCandidates(),
+        )
     }
 
     private fun validateRecord(record: AccountSlotRecord): AccountSlotRecord? {
@@ -263,7 +245,7 @@ object AccountSlotRegistry {
         if (activeUserIds.size != record.activeUserIds.size || activeUserIds.distinct().size != activeUserIds.size) {
             return null
         }
-        if (activeUserIds.size > MAX_EXECUTABLE_ACCOUNT_SLOTS) return null
+        // 全量放行：activeUserIds 数量不再设上限（仅用于 UI 展示与记录）。
         if (record.migrationState == AccountSlotMigrationState.SELECTION_REQUIRED && activeUserIds.isNotEmpty()) {
             return null
         }

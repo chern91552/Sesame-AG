@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import io.github.aoguai.sesameag.entity.UserEntity
 import io.github.aoguai.sesameag.hook.AccountSlotMigrationState
 import io.github.aoguai.sesameag.hook.AccountSlotSnapshot
+import io.github.aoguai.sesameag.hook.MAX_EXECUTABLE_ACCOUNT_SLOTS
 import io.github.aoguai.sesameag.ui.compose.CommonAlertDialog
 
 @Composable
@@ -75,7 +76,7 @@ fun AutomationContent(
         if (accountSlots.migrationState == AccountSlotMigrationState.SELECTION_REQUIRED) {
             item {
                 Text(
-                    text = "选择两个可执行账号",
+                    text = "最多选择 $MAX_EXECUTABLE_ACCOUNT_SLOTS 个可执行账号",
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
@@ -90,7 +91,7 @@ fun AutomationContent(
                         onCheckedChange = { checked ->
                             selectedLegacySlots = when {
                                 !checked -> selectedLegacySlots - userId
-                                selectedLegacySlots.size < 2 -> selectedLegacySlots + userId
+                                selectedLegacySlots.size < MAX_EXECUTABLE_ACCOUNT_SLOTS -> selectedLegacySlots + userId
                                 else -> selectedLegacySlots
                             }
                         },
@@ -107,9 +108,10 @@ fun AutomationContent(
                         onSelectLegacySlots(selectedLegacySlots.toList())
                         selectedLegacySlots = emptySet()
                     },
-                    enabled = selectedLegacySlots.size == 2,
+                    enabled = selectedLegacySlots.isNotEmpty() &&
+                        selectedLegacySlots.size <= MAX_EXECUTABLE_ACCOUNT_SLOTS,
                 ) {
-                    Text("确认选择（${selectedLegacySlots.size}/2）")
+                    Text("确认选择（${selectedLegacySlots.size}/$MAX_EXECUTABLE_ACCOUNT_SLOTS）")
                 }
             }
             item { HorizontalDivider() }
@@ -130,20 +132,13 @@ fun AutomationContent(
                     "account-${user.userId?.trim()?.takeIf(String::isNotEmpty) ?: "unknown"}-$index"
                 },
             ) { _, user ->
-                val userId = user.userId?.trim().orEmpty()
                 AccountCard(
                     user = user,
-                    isExecutable = userId in accountSlots.activeUserIds,
+                    // 全量放行：任何已载入账号都可执行。
+                    isExecutable = true,
                     onOpenSettings = { onOpenSettings(user) },
                     onOpenFriendCenter = { onOpenFriendCenter(user) },
-                    onRemove = if (
-                        accountSlots.migrationState == AccountSlotMigrationState.READY &&
-                        userId in accountSlots.activeUserIds
-                    ) {
-                        { pendingSlotRemoval = userId }
-                    } else {
-                        null
-                    },
+                    onRemove = null,
                 )
             }
         }

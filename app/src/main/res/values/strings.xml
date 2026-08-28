@@ -176,6 +176,7 @@ If you purchased it, please contact the seller for a refund or report the seller
     <string name="bulid_target">Build Target: </string>
     <string name="text_api">…</string>
     <string name="search_for_unlocked_items">search for unlocked items</string>
+    <string name="search_for_planted_items">search for planted trees and regions</string>
     <string name="search_for_unlocked_regions">search for unlocked regions</string>
     <string name="search_for_new_items_on_saplings">search for new items on saplings</string>
     <string name="query_the_remaining_amount_of_saplings">query the remaining amount of saplings</string>

@@ -404,6 +404,30 @@ object Files {
         return cityCodeFile
     }
 
+    @JvmStatic
+    fun getFullTreeRegionFile(): File {
+        val targetFile = File(CONFIG_DIR, "full_tree_region.json")
+        if (targetFile.exists() && targetFile.isDirectory) {
+            if (!targetFile.delete()) {
+                Log.error(TAG, "Failed to delete directory: ${targetFile.absolutePath}")
+            }
+        }
+        return targetFile
+    }
+
+    @JvmStatic
+    fun getPlantedSnapshotFile(userId: String): File {
+        val safeUid = userId.trim().ifBlank { "default" }
+        val userDir = getUserConfigDir(safeUid)
+        val target = File(userDir, "planted_tree_region.json")
+        if (target.exists() && target.isDirectory) {
+            if (!target.delete()) {
+                Log.error(TAG, "Failed to delete plantedSnapshot directory: ${target.absolutePath}")
+            }
+        }
+        return target
+    }
+
     private fun ensureLogFile(logFileName: String): File {
         val logFile = File(LOG_DIR, logFileName)
         if (logFile.exists() && logFile.isDirectory) {

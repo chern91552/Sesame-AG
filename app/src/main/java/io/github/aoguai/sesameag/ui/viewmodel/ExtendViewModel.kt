@@ -73,6 +73,31 @@ class ExtendViewModel : ViewModel() {
         addBroadcastItem(R.string.search_for_new_items_on_saplings, "getNewTreeItems")
         addBroadcastItem(R.string.search_for_unlocked_regions, "queryAreaTrees")
         addBroadcastItem(R.string.search_for_unlocked_items, "getUnlockTreeItems")
+        // 查询已种树+地区：弹框输入目标账号 uid（留空=查当前登录账号自己）
+        menuItems.add(MenuItem(context.getString(R.string.search_for_planted_items)) {
+            currentDialog = ExtendDialog.InputDialog(
+                title = "目标账号 uid（留空=查自己）"
+            ) { uid ->
+                sendItemsBroadcast(context, "getPlantedTreeItems", uid.trim())
+                ToastUtil.makeText(context, debugTips, 0).show()
+                dismissDialog()
+            }
+        })
+        menuItems.add(MenuItem("重置全量树*地区配置（覆盖默认）") {
+            sendItemsBroadcast(context, "resetFullTreeRegionConfig")
+            val f = Files.getFullTreeRegionFile()
+            ToastUtil.makeText(
+                context,
+                "已覆盖为默认模板：${f.absolutePath}\n你可直接用文件管理器编辑该 JSON，再点「查询已种树+地区」即可对比缺失。",
+                1
+            ).show()
+        })
+        menuItems.add(MenuItem("查看全量树*地区配置文件") {
+            // 确保文件存在后打开（只读查看，编辑请用文件管理器）
+            sendItemsBroadcast(context, "ensureFullTreeRegionConfig")
+            val f = Files.getFullTreeRegionFile()
+            onOpenLog(f.absolutePath)
+        })
         menuItems.add(MenuItem("查询被浇水情况") {
             sendItemsBroadcast(context, "getWateredItems")
             ToastUtil.makeText(context, debugTips, 0).show()
@@ -174,15 +199,15 @@ class ExtendViewModel : ViewModel() {
         dismissDialog()
     }
 
-    private fun sendItemsBroadcast(context: Context, type: String) {
+    private fun sendItemsBroadcast(context: Context, type: String, data: String = "") {
         val intent = Intent(ApplicationHookConstants.BroadcastActions.RPC_TEST).apply {
             setPackage(General.PACKAGE_NAME)
             putExtra("method", "")
-            putExtra("data", "")
+            putExtra("data", data)
             putExtra("type", type)
         }
         context.sendBroadcast(intent)
-        Log.debug("ExtendViewModel", "扩展工具主动调用广播查询📢：$type")
+        Log.debug("ExtendViewModel", "扩展工具主动调用广播查询📢：$type${if (data.isBlank()) "" else " data=$data"}")
     }
 
     private fun isShizukuReady(): Boolean {

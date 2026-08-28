@@ -35,6 +35,9 @@ object StatusFlags {
     /** 自定义 RPC 定时任务：每日计数前缀 */
     const val FLAG_CUSTOM_RPC_SCHEDULE_COUNT_PREFIX: String = "customRpcSchedule::"
 
+    /** 森林：每日「可兑换却未种」提醒是否已推送，用于同日只提醒一次 */
+    const val FLAG_FOREST_EXCHANGE_UNPLANTED_ALERT_TODAY: String = "Forest::exchangeUnplantedAlertToday"
+
     /** 好友中心：今日已从支付宝侧同步好友快照 */
     const val FLAG_FRIEND_CENTER_SYNC_TODAY: String = "friendCenter::syncToday"
 

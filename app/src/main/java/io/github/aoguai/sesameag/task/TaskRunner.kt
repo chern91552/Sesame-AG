@@ -8,6 +8,7 @@ import io.github.aoguai.sesameag.hook.AccountSessionCoordinator
 import io.github.aoguai.sesameag.hook.ApplicationHook
 import io.github.aoguai.sesameag.hook.ApplicationHookConstants
 import io.github.aoguai.sesameag.hook.CustomRpcScheduler
+import io.github.aoguai.sesameag.hook.ForestExchangeNotifier
 import io.github.aoguai.sesameag.model.BaseModel
 import io.github.aoguai.sesameag.model.CustomSettings
 import io.github.aoguai.sesameag.model.Model
@@ -133,6 +134,9 @@ class CoroutineTaskRunner(allModels: List<Model>) {
                 Log.record(TAG, "⏸ 检测到离线模式，跳过自定义 RPC 与后续任务流程")
             } else {
                 CustomRpcScheduler.runIfEnabled()
+                // 每日「可兑换但未种的树×地区」检查 + 通知栏提醒
+                val notifierUid = (runSessionOwnerUserId ?: "").trim()
+                ForestExchangeNotifier.runIfEnabled(notifierUid)
             }
 
             // 执行多轮任务
