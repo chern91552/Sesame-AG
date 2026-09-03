@@ -33,7 +33,6 @@ object RuntimeIdentityGuard {
         val processName: String,
     )
 
-    private const val PRIMARY_ANDROID_USER_ID = 0
     private const val ANDROID_PER_USER_RANGE = 100_000
 
     @Volatile
@@ -55,7 +54,7 @@ object RuntimeIdentityGuard {
         val userId = androidUserId(applicationInfo.uid)
         val decision = when {
             packageName != General.MODULE_PACKAGE_NAME -> reject("module_package_mismatch")
-            userId != PRIMARY_ANDROID_USER_ID -> reject("module_non_primary_user")
+            userId < 0 -> reject("module_user_id_invalid")
             sourceDir.isBlank() -> reject("module_source_missing")
             else -> {
                 moduleSnapshot = ModuleSnapshot(applicationInfo.uid, sourceDir)
@@ -77,16 +76,20 @@ object RuntimeIdentityGuard {
         val appProcessName = applicationInfo.processName.orEmpty()
         val targetProcessName = processName ?: return rejectAndStore("target_process_missing")
         val sourceDir = applicationInfo.sourceDir.orEmpty()
-        val userId = androidUserId(applicationInfo.uid)
+        val targetUserId = androidUserId(applicationInfo.uid)
+        val moduleUserId = androidUserId(module.uid)
         val decision = when {
             packageName != General.PACKAGE_NAME -> reject("target_package_mismatch")
             appPackageName != General.PACKAGE_NAME -> reject("target_application_package_mismatch")
             !isSupportedTargetProcess(targetProcessName) -> reject("target_unsupported_process")
             targetProcessName == General.PACKAGE_NAME && appProcessName != General.PACKAGE_NAME ->
                 reject("target_application_process_mismatch")
-            userId != PRIMARY_ANDROID_USER_ID -> reject("target_non_primary_user")
+            targetUserId < 0 -> reject("target_user_id_invalid")
+            moduleUserId < 0 -> reject("module_user_id_invalid")
+            // 允许分身：模块 App 与目标应用必须安装在同一个 Android 用户空间（user 号一致）。
+            // 主用户 (0) / 应用分身 (10/11/...) / 工作资料 / 手机分身，只要两边是同一个 user 号就放行。
+            moduleUserId != targetUserId -> reject("module_target_user_mismatch")
             sourceDir.isBlank() -> reject("target_source_missing")
-            androidUserId(module.uid) != PRIMARY_ANDROID_USER_ID -> reject("module_non_primary_user")
             else -> {
                 targetSnapshot = TargetSnapshot(applicationInfo.uid, sourceDir, targetProcessName)
                 attachedIdentity = null
@@ -106,6 +109,9 @@ object RuntimeIdentityGuard {
         val decision = runCatching {
             val targetInfo = context.packageManager.getApplicationInfo(General.PACKAGE_NAME, 0)
             val moduleInfo = context.packageManager.getApplicationInfo(General.MODULE_PACKAGE_NAME, 0)
+            val moduleUserId = androidUserId(module.uid)
+            val moduleInfoUserId = androidUserId(moduleInfo.uid)
+            val targetUserId = androidUserId(target.uid)
             when {
                 context.packageName != General.PACKAGE_NAME -> reject("target_context_package_mismatch")
                 !matchesTargetApplication(contextInfo, target) -> reject("target_context_mismatch")
@@ -113,7 +119,13 @@ object RuntimeIdentityGuard {
                 !matchesTargetApplication(targetInfo, target) -> reject("target_package_manager_mismatch")
                 moduleInfo.packageName != General.MODULE_PACKAGE_NAME -> reject("module_package_manager_mismatch")
                 moduleInfo.uid != module.uid -> reject("module_uid_mismatch")
-                androidUserId(moduleInfo.uid) != PRIMARY_ANDROID_USER_ID -> reject("module_non_primary_user")
+                moduleUserId < 0 -> reject("module_user_id_invalid")
+                moduleInfoUserId < 0 -> reject("module_user_id_invalid")
+                targetUserId < 0 -> reject("target_user_id_invalid")
+                // 允许分身：模块 metadata 用户号（记录的）与 PackageManager 返回模块信息用户号一致，
+                // 并与目标用户号一致——三个值一致才通过。
+                moduleUserId != moduleInfoUserId -> reject("module_user_mismatch")
+                moduleInfoUserId != targetUserId -> reject("module_target_user_mismatch")
                 moduleInfo.sourceDir.orEmpty() != module.sourceDir -> reject("module_source_mismatch")
                 else -> {
                     attachedIdentity = RuntimeIdentity(
@@ -161,7 +173,6 @@ object RuntimeIdentityGuard {
     private fun matchesTargetApplication(info: ApplicationInfo, target: TargetSnapshot): Boolean =
         info.packageName == General.PACKAGE_NAME &&
             info.uid == target.uid &&
-            androidUserId(info.uid) == PRIMARY_ANDROID_USER_ID &&
             info.sourceDir.orEmpty() == target.sourceDir
 
     /** UserHandle.getUserId is hidden from this module's compile SDK; Android reserves 100000 UIDs per user. */
