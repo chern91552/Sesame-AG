@@ -135,6 +135,21 @@ class ExtendViewModel : ViewModel() {
             onOpenLog(file.absolutePath)
         })
 
+        // 2.2 查看好友能量统计（friendWatch.json：记录每个好友被收了多少能量）
+        menuItems.add(MenuItem("查看好友能量统计") {
+            val uid = UserMap.currentUid ?: DataStore.get("activedUser", UserEntity::class.java)?.userId
+            if (uid.isNullOrBlank()) {
+                ToastUtil.showToast(context, "用户为空，无法打开好友能量统计")
+                return@MenuItem
+            }
+            val file = Files.getTargetFileofUser(uid, "friendWatch.json")
+            if (file == null) {
+                ToastUtil.showToast(context, "好友能量统计文件路径获取失败")
+                return@MenuItem
+            }
+            onOpenLog(file.absolutePath)
+        })
+
         // 3. Debug 功能
         menuItems.add(MenuItem("写入光盘") {
             currentDialog = ExtendDialog.WritePhotoTest("xxxx")

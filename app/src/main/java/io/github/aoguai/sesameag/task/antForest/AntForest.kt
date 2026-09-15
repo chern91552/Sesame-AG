@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import io.github.aoguai.sesameag.data.RuntimeInfo
 import io.github.aoguai.sesameag.data.Status
 import io.github.aoguai.sesameag.data.StatusFlags
+import io.github.aoguai.sesameag.data.FriendWatch
 import io.github.aoguai.sesameag.data.Statistics
 import io.github.aoguai.sesameag.entity.CollectEnergyEntity
 import io.github.aoguai.sesameag.entity.MapperEntity
@@ -1071,6 +1072,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
             // 加载“今日统计”（按账号维度持久化），用于跨重启/多次运行累计
             selfId?.takeIf { it.isNotBlank() }?.let { uid ->
                 Statistics.load(uid)
+                FriendWatch.load(uid)
                 totalCollected = Statistics.getData(uid, Statistics.TimeType.DAY, Statistics.DataType.COLLECTED)
                 totalHelpCollected = Statistics.getData(uid, Statistics.TimeType.DAY, Statistics.DataType.HELPED)
                 totalWatered = Statistics.getData(uid, Statistics.TimeType.DAY, Statistics.DataType.WATERED)
@@ -1112,6 +1114,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
             // 保存统计文件（按账号维度）
             selfId?.takeIf { it.isNotBlank() }?.let { uid ->
                 Statistics.save(uid)
+                FriendWatch.save(uid)
                 // 保存后再刷新一次本地展示值（避免跨天重置导致展示不一致）
                 totalCollected = Statistics.getData(uid, Statistics.TimeType.DAY, Statistics.DataType.COLLECTED)
                 totalHelpCollected = Statistics.getData(uid, Statistics.TimeType.DAY, Statistics.DataType.HELPED)
@@ -3658,13 +3661,16 @@ class AntForest : ModelTask(), EnergyCollectCallback {
                         val randomIndex = random.nextInt(emojiList.size)
                         val randomEmoji = emojiList[randomIndex]
                         val collectType = "一键收取️"
+                        val friendName = getAndCacheUserName(userId)
                         val str =
-                            collectType + randomEmoji + collected + "g[" + getAndCacheUserName(
-                                userId
-                            ) + "]#" + bombSuffix
+                            collectType + randomEmoji + collected + "g[" + friendName + "]#" + bombSuffix
                         selfId?.takeIf { it.isNotBlank() }?.let { uid ->
                             Statistics.addData(uid, Statistics.DataType.COLLECTED, collected)
                             totalCollected = Statistics.getData(uid, Statistics.TimeType.DAY, Statistics.DataType.COLLECTED)
+                            // 好友能量统计：仅统计从好友处收取的能量（不收自己的）
+                            if (userId != uid) {
+                                FriendWatch.friendWatch(uid, userId, friendName, collected)
+                            }
                         } ?: run {
                             totalCollected += collected
                         }
@@ -3698,13 +3704,16 @@ class AntForest : ModelTask(), EnergyCollectCallback {
                             "蹲点收取" -> "蹲点收取"
                             else -> "普通收取"
                         }
+                        val friendName = getAndCacheUserName(userId)
                         val str =
-                            collectType + randomEmoji + collected + "g[" + getAndCacheUserName(
-                                userId
-                            ) + "]" + if (bombSuffix.isNotEmpty()) "#$bombSuffix" else ""
+                            collectType + randomEmoji + collected + "g[" + friendName + "]" + if (bombSuffix.isNotEmpty()) "#$bombSuffix" else ""
                         selfId?.takeIf { it.isNotBlank() }?.let { uid ->
                             Statistics.addData(uid, Statistics.DataType.COLLECTED, collected)
                             totalCollected = Statistics.getData(uid, Statistics.TimeType.DAY, Statistics.DataType.COLLECTED)
+                            // 好友能量统计：仅统计从好友处收取的能量（不收自己的）
+                            if (userId != uid) {
+                                FriendWatch.friendWatch(uid, userId, friendName, collected)
+                            }
                         } ?: run {
                             totalCollected += collected
                         }
