@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import io.github.aoguai.sesameag.data.General
+import java.io.File
 
 /**
  * Verifies that the module is running against the one supported Android user and target process.
@@ -61,6 +62,10 @@ object RuntimeIdentityGuard {
                 accept()
             }
         }
+        if (!decision.accepted) {
+            android.util.Log.e("ApplicationHook", "module=${General.MODULE_PACKAGE_NAME} instance_rejected stage=module reason=${decision.reasonCode} " +
+                "package=$packageName uid=${applicationInfo.uid} user=$userId source=$sourceDir")
+        }
         lastDecision = decision
         return decision
     }
@@ -96,6 +101,13 @@ object RuntimeIdentityGuard {
                 accept()
             }
         }
+        if (!decision.accepted) {
+            android.util.Log.println(
+                if (decision.reasonCode == "target_unsupported_process") android.util.Log.INFO else android.util.Log.ERROR,
+                "ApplicationHook", "module=${General.MODULE_PACKAGE_NAME} instance_rejected stage=package reason=${decision.reasonCode} " +
+                "package=$packageName applicationPackage=$appPackageName uid=${applicationInfo.uid} user=$targetUserId " +
+                "process=$targetProcessName applicationProcess=$appProcessName source=$sourceDir")
+        }
         lastDecision = decision
         return decision
     }
@@ -106,17 +118,21 @@ object RuntimeIdentityGuard {
         val module = moduleSnapshot ?: return rejectAndStore("module_identity_missing")
         val target = targetSnapshot ?: return rejectAndStore("target_identity_missing")
         val contextInfo = context.applicationInfo ?: return rejectAndStore("target_context_missing")
+        var metadataStep = "query_target"
         val decision = runCatching {
             val targetInfo = context.packageManager.getApplicationInfo(General.PACKAGE_NAME, 0)
+            metadataStep = "query_module"
             val moduleInfo = context.packageManager.getApplicationInfo(General.MODULE_PACKAGE_NAME, 0)
             val moduleUserId = androidUserId(module.uid)
             val moduleInfoUserId = androidUserId(moduleInfo.uid)
             val targetUserId = androidUserId(target.uid)
+            metadataStep = "compare_identity"
             when {
                 context.packageName != General.PACKAGE_NAME -> reject("target_context_package_mismatch")
-                !matchesTargetApplication(contextInfo, target) -> reject("target_context_mismatch")
+                !matchesTargetIdentity(contextInfo, target) -> reject("target_context_mismatch")
                 Application.getProcessName() != target.processName -> reject("target_runtime_process_mismatch")
-                !matchesTargetApplication(targetInfo, target) -> reject("target_package_manager_mismatch")
+                !matchesTargetIdentity(targetInfo, target) -> reject("target_package_manager_mismatch")
+                !matchesTargetSources(contextInfo, targetInfo, target) -> reject("target_source_mismatch")
                 moduleInfo.packageName != General.MODULE_PACKAGE_NAME -> reject("module_package_manager_mismatch")
                 moduleInfo.uid != module.uid -> reject("module_uid_mismatch")
                 moduleUserId < 0 -> reject("module_user_id_invalid")
@@ -136,8 +152,20 @@ object RuntimeIdentityGuard {
                     )
                     accept()
                 }
+            }.also { result ->
+                if (!result.accepted) {
+                    android.util.Log.e("ApplicationHook", "module=${General.MODULE_PACKAGE_NAME} instance_rejected stage=attach reason=${result.reasonCode} " +
+                        "modulePackage=${moduleInfo.packageName} moduleUid=${moduleInfo.uid} moduleUser=${androidUserId(moduleInfo.uid)} moduleSource=${moduleInfo.sourceDir} " +
+                        "targetPackage=${targetInfo.packageName} targetUid=${targetInfo.uid} targetUser=${androidUserId(targetInfo.uid)} targetSource=${targetInfo.sourceDir} " +
+                        "contextPackage=${context.packageName} contextUid=${contextInfo.uid} contextSource=${contextInfo.sourceDir}")
+                }
             }
-        }.getOrElse { reject("package_metadata_unavailable") }
+        }.getOrElse {
+            android.util.Log.e("ApplicationHook", "module=${General.MODULE_PACKAGE_NAME} package_metadata_unavailable step=$metadataStep " +
+                "context=${context.packageName} uid=${contextInfo.uid} source=${contextInfo.sourceDir} " +
+                "error=${it.javaClass.simpleName}", it)
+            reject("package_metadata_unavailable")
+        }
         lastDecision = decision
         return decision
     }
@@ -170,10 +198,26 @@ object RuntimeIdentityGuard {
         return suffix.isNotEmpty() && suffix.all { it in '0'..'9' }
     }
 
-    private fun matchesTargetApplication(info: ApplicationInfo, target: TargetSnapshot): Boolean =
+    private fun matchesTargetIdentity(info: ApplicationInfo, target: TargetSnapshot): Boolean =
         info.packageName == General.PACKAGE_NAME &&
-            info.uid == target.uid &&
-            info.sourceDir.orEmpty() == target.sourceDir
+            info.uid == target.uid
+
+    private fun matchesTargetSources(
+        contextInfo: ApplicationInfo,
+        targetInfo: ApplicationInfo,
+        target: TargetSnapshot,
+    ): Boolean {
+        val contextSource = normalizedSourcePath(contextInfo.sourceDir) ?: return false
+        val targetSource = normalizedSourcePath(target.sourceDir) ?: return false
+        val packageManagerSource = normalizedSourcePath(targetInfo.sourceDir) ?: return false
+        return contextSource == targetSource || contextSource == packageManagerSource
+    }
+
+    private fun normalizedSourcePath(sourceDir: String?): String? =
+        sourceDir
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { path -> runCatching { File(path).canonicalPath }.getOrNull() }
 
     /** UserHandle.getUserId is hidden from this module's compile SDK; Android reserves 100000 UIDs per user. */
     private fun androidUserId(uid: Int): Int =
@@ -182,6 +226,11 @@ object RuntimeIdentityGuard {
     private fun accept(): RuntimeIdentityDecision = RuntimeIdentityDecision(true)
 
     private fun reject(reasonCode: String): RuntimeIdentityDecision {
+        android.util.Log.println(
+            if (reasonCode == "target_unsupported_process") android.util.Log.INFO else android.util.Log.WARN,
+            "ApplicationHook", "module=${General.MODULE_PACKAGE_NAME} instance_rejected reason=$reasonCode process=${Application.getProcessName()} " +
+            "runtimeUid=${android.os.Process.myUid()} moduleUid=${moduleSnapshot?.uid} targetUid=${targetSnapshot?.uid} " +
+            "moduleSource=${moduleSnapshot?.sourceDir} targetSource=${targetSnapshot?.sourceDir}")
         attachedIdentity = null
         return RuntimeIdentityDecision(false, reasonCode)
     }

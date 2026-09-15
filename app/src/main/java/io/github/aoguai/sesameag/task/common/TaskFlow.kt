@@ -1,7 +1,6 @@
 package io.github.aoguai.sesameag.task.common
 
 import io.github.aoguai.sesameag.hook.ApplicationHookConstants
-import io.github.aoguai.sesameag.util.GlobalThreadPools
 import io.github.aoguai.sesameag.util.RpcOfflineRisk
 import io.github.aoguai.sesameag.util.TaskBlacklist
 import org.json.JSONObject
@@ -642,7 +641,6 @@ class TaskFlowEngine(
                         "动作已推进"
                     }
                 adapter.logInfo("${adapter.flowName}[$reason，先回查服务端任务列表]")
-                GlobalThreadPools.sleepCompat(roundSleepMs)
                 round++
                 continue
             }
@@ -695,7 +693,6 @@ class TaskFlowEngine(
                 roundLimit = extendedRoundLimit
             }
 
-            GlobalThreadPools.sleepCompat(roundSleepMs)
             round++
         }
 
@@ -948,9 +945,9 @@ class TaskFlowEngine(
 
             TaskRpcFailureType.BUSINESS_LIMIT -> TaskFlowDecision.STOP_TODAY_OR_CURRENT_CHAIN
 
-            TaskRpcFailureType.UNSUPPORTED_NO_CLOSURE,
-            TaskRpcFailureType.NON_RETRYABLE_INVALID,
-            -> TaskFlowDecision.BLACKLIST
+            TaskRpcFailureType.UNSUPPORTED_NO_CLOSURE -> TaskFlowDecision.BLACKLIST
+
+            TaskRpcFailureType.NON_RETRYABLE_INVALID -> TaskFlowDecision.LOG_ONLY
 
             TaskRpcFailureType.RETRYABLE_RPC -> TaskFlowDecision.RETRY_LATER
 
@@ -1065,10 +1062,10 @@ class TaskFlowEngine(
             buildString {
                 append(adapter.flowName)
                 when {
+                    interrupted || failureCount > 0 -> append("[本轮动作失败(含可重试)]")
                     completed -> append("[本轮完成]")
-                    noProgressSuccess && !progressed -> append("[本轮成功但未确认进展]")
-                    !interrupted && failureCount == 0 -> append("[本轮明确延后]")
-                    else -> append("[本轮动作失败(含可重试)]")
+                    noProgressSuccess && !progressed -> append("[本轮动作已受理但未确认进展]")
+                    else -> append("[本轮明确延后]")
                 }
                 append("[轮次:")
                 append(rounds)

@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import android.os.RemoteException
+import io.github.aoguai.sesameag.BuildConfig
 import io.github.aoguai.sesameag.ICallback
 import io.github.aoguai.sesameag.ICommandService
 import io.github.aoguai.sesameag.IStatusListener
@@ -26,6 +27,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 object CommandUtil {
 
     private const val TAG = "CommandUtil"
+    internal const val DIAGNOSTIC_LOGCAT_COMMAND =
+        "logcat -b main -b system -b crash -d -t 64 -v epoch -v uid SesameLog:W LibXposedRuntime:W ApplicationHook:W AndroidRuntime:W '*:S'"
     private const val ACTION_BIND = "io.github.aoguai.sesameag.action.BIND_COMMAND_SERVICE"
     private const val BIND_TIMEOUT_MS = 5000L      // 绑定超时时间
     private const val EXEC_TIMEOUT_MS = 15000L     // 命令执行超时时间
@@ -48,6 +51,7 @@ object CommandUtil {
     val serviceStatus = _serviceStatus.asStateFlow()
 
     // AIDL 接口实例
+    @Volatile
     private var commandService: ICommandService? = null
 
     // 连接状态管理
@@ -77,6 +81,7 @@ object CommandUtil {
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             Log.d(TAG, "✅ CommandService 已连接: $name")
+            ModuleDiagnostics.event("command_bind", "connected", "component=$name")
             try {
                 commandService = ICommandService.Stub.asInterface(service)
 
@@ -113,6 +118,7 @@ object CommandUtil {
     }
 
     private fun handleServiceLost(updateStatus: Boolean = true) {
+        ModuleDiagnostics.event("command_bind", "lost", "updateStatus=$updateStatus")
         commandService = null
         isBound.set(false)
         connectionDeferred = null
@@ -132,8 +138,9 @@ object CommandUtil {
         }
     }
 
-    private fun buildServiceIntent(context: Context): Intent {
-        return Intent(context.applicationContext, CommandService::class.java).apply {
+    private fun buildServiceIntent(): Intent {
+        return Intent().apply {
+            component = ComponentName(BuildConfig.APPLICATION_ID, CommandService::class.java.name)
             action = ACTION_BIND
         }
     }
@@ -181,7 +188,9 @@ object CommandUtil {
             connectionDeferred = CompletableDeferred()
             val appContext = context.applicationContext
             boundContext = appContext
-            val intent = buildServiceIntent(appContext)
+            val intent = buildServiceIntent()
+            var lastFailure = "not_attempted"
+            val bindContext = "caller=${appContext.packageName} uid=${android.os.Process.myUid()} component=${intent.component} action=$ACTION_BIND"
 
             try {
                 repeat(BIND_RETRY_COUNT) { attempt ->
@@ -207,7 +216,9 @@ object CommandUtil {
                             return@withLock true
                         }
 
-                        Log.w(TAG, "⚠️ 第 ${attempt + 1} 次绑定超时")
+                        lastFailure = "bind_timeout"
+                        Log.w(TAG, "command_bind reason=$lastFailure attempt=${attempt + 1} timeoutMs=$BIND_TIMEOUT_MS $bindContext")
+                        ModuleDiagnostics.event("command_bind", lastFailure, "attempt=${attempt + 1} $bindContext")
                         try {
                             appContext.unbindService(serviceConnection)
                         } catch (_: Exception) {
@@ -218,14 +229,17 @@ object CommandUtil {
                         return@repeat
                     }
 
-                    Log.w(TAG, "⚠️ 第 ${attempt + 1} 次 bindService 返回 false")
+                    lastFailure = "bind_false"
+                    Log.w(TAG, "command_bind reason=$lastFailure attempt=${attempt + 1} $bindContext")
+                    ModuleDiagnostics.event("command_bind", lastFailure, "attempt=${attempt + 1} $bindContext")
                 }
 
-                Log.e(TAG, "❌ bindService 返回 false")
+                Log.e(TAG, "command_bind failed reason=$lastFailure $bindContext")
                 _serviceStatus.value = ServiceStatus.Error("服务绑定失败")
                 return@withLock false
             } catch (e: Exception) {
-                Log.e(TAG, "绑定异常", e)
+                ModuleDiagnostics.event("command_bind", "exception", "$bindContext error=${e.javaClass.simpleName}")
+                Log.e(TAG, "绑定异常 $bindContext", e)
                 _serviceStatus.value = ServiceStatus.Error(e.message ?: "未知错误")
                 return@withLock false
             }
@@ -266,6 +280,43 @@ object CommandUtil {
         }
     }
 
+    /** 只消费已就绪的执行器；诊断读取不绑定服务或发起授权。 */
+    internal suspend fun readDiagnosticLogcat(): Result<String> = withContext(Dispatchers.IO) {
+        val service = commandService
+        if (service == null || serviceStatus.value !is ServiceStatus.Active) {
+            return@withContext Result.failure(IllegalStateException("executor_unavailable"))
+        }
+        val response = CompletableDeferred<Result<String>>()
+        try {
+            service.executeCommand(DIAGNOSTIC_LOGCAT_COMMAND, object : ICallback.Stub() {
+                override fun onSuccess(output: String) {
+                    response.complete(Result.success(output))
+                }
+                override fun onError(error: String) {
+                    response.complete(Result.failure(java.io.IOException(error.take(256))))
+                }
+            })
+            withTimeout(EXEC_TIMEOUT_MS) { response.await() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    fun isExecutionAllowed(userId: String): Boolean {
+        val service = commandService ?: return false
+        return try {
+            service.isExecutionAllowed(userId)
+        } catch (e: RemoteException) {
+            handleServiceLost()
+            false
+        } catch (e: Exception) {
+            Log.e(TAG, "执行条件查询失败", e)
+            false
+        }
+    }
+
     /**
      * 等待服务状态从 Loading 落定，供宿主进程复用与首页一致的执行器状态。
      */
@@ -273,6 +324,7 @@ object CommandUtil {
         context: Context,
         timeoutMs: Long = BIND_TIMEOUT_MS + 1500L
     ): ServiceStatus = withContext(Dispatchers.IO) {
+        bindRequested = true
         if (!ensureServiceBound(context)) {
             return@withContext _serviceStatus.value
         }

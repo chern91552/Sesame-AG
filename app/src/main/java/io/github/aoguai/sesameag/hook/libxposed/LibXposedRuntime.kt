@@ -26,12 +26,14 @@ internal class LibXposedRuntime(
 
     fun onModuleLoaded(module: XposedModule, param: ModuleLoadedParam) {
         if (processName != null) {
+            Log.w(TAG, "module=${General.MODULE_PACKAGE_NAME} Ignoring duplicate onModuleLoaded callback")
             module.log(Log.WARN, TAG, "Ignoring duplicate onModuleLoaded callback")
             return
         }
 
         val identityDecision = RuntimeIdentityGuard.verifyModuleLoaded(module.moduleApplicationInfo)
         if (!identityDecision.accepted) {
+            Log.e(TAG, "module=${General.MODULE_PACKAGE_NAME} instance_rejected: ${identityDecision.reasonCode} process=${param.processName}")
             module.log(Log.ERROR, TAG, "instance_rejected: ${identityDecision.reasonCode}")
             module.detach()
             return
@@ -41,6 +43,7 @@ internal class LibXposedRuntime(
         val frameworkName = runCatching { module.frameworkName }.getOrDefault("Unknown")
         val apiVersion = runCatching { module.apiVersion }.getOrDefault(0)
         if (!ModuleStatus.isSupportedLsposedFramework(frameworkName, apiVersion)) {
+            Log.e(TAG, "module=${General.MODULE_PACKAGE_NAME} Unsupported runtime: $frameworkName API $apiVersion process=${param.processName}")
             module.log(
                 Log.ERROR,
                 TAG,
@@ -70,6 +73,7 @@ internal class LibXposedRuntime(
         }
 
         val targetProcessName = processName ?: run {
+            Log.e(TAG, "module=${General.MODULE_PACKAGE_NAME} Package callback arrived before module runtime initialization")
             module.log(Log.ERROR, TAG, "Package callback arrived before module runtime initialization")
             module.detach()
             return
@@ -80,11 +84,25 @@ internal class LibXposedRuntime(
             processName = targetProcessName,
         )
         if (!identityDecision.accepted) {
-            module.log(Log.ERROR, TAG, "instance_rejected: ${identityDecision.reasonCode}")
+            val reasonCode = identityDecision.reasonCode ?: "unknown"
+            val priority = if (reasonCode == "target_unsupported_process") Log.INFO else Log.ERROR
+            Log.println(priority, TAG, "module=${General.MODULE_PACKAGE_NAME} instance_rejected: $reasonCode process=$targetProcessName")
+            module.log(
+                priority,
+                TAG,
+                "instance_rejected: $reasonCode process=$targetProcessName " +
+                    "process_role=${if (targetProcessName == General.PACKAGE_NAME) "main" else "auxiliary"}",
+            )
             module.detach()
             return
         }
         packageReady = true
+        module.log(
+            Log.INFO,
+            TAG,
+            "instance_accepted: process=$targetProcessName " +
+                "process_role=${if (targetProcessName == General.PACKAGE_NAME) "main" else "capture_only"}",
+        )
 
         try {
             XposedEnv.classLoader = param.classLoader
@@ -94,6 +112,7 @@ internal class LibXposedRuntime(
             applicationHook.loadPackage(param)
             SesameLog.runtime(TAG, "Hooked ${param.packageName} in process $targetProcessName via onPackageReady")
         } catch (t: Throwable) {
+            Log.e(TAG, "module=${General.MODULE_PACKAGE_NAME} Hook failed process=$targetProcessName", t)
             module.log(Log.ERROR, TAG, "Hook failed - ${t.javaClass.simpleName}", t)
         } finally {
             // One scoped package is enough for this entry; hooks remain active after detaching.
